@@ -1,0 +1,98 @@
+import mediapipe as mp
+import pioneer_sdk
+import cv2
+from math import radians
+
+dron = pioneer_sdk.Pioneer()
+cam = pioneer_sdk.Camera()
+
+dron.arm()
+dron.takeoff()
+
+dron.go_to_local_point(0, 0, float(input('введите ваш рост: ')), 0)
+while not dron.point_reached():
+    pass
+
+width = 480
+height = 320
+
+def calculate_distance(focal_length, known_width, pixel_width):
+    return (known_width * focal_length) / pixel_width
+
+def distance_to_face(frame):
+    focal_length = 480.0
+    known_width = 0.2
+
+    mp_face_detection = mp.solutions.face_detection.FaceDetection()
+    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    results = mp_face_detection.process(frame_rgb)
+
+    if results.detections:
+        for detection in results.detections:
+            bbox = detection.location_data.relative_bounding_box
+            image_height, image_width, _ = frame.shape
+            x, y, w, h = int(bbox.xmin * image_width), int(bbox.ymin * image_height), \
+                         int(bbox.width * image_width), int(bbox.height * image_height)
+            face_width_pixels = w
+
+            face_x = (bbox.xmin + bbox.width)/2
+            face_y = (bbox.ymin + bbox.height)/2
+
+            distance = calculate_distance(focal_length, known_width, face_width_pixels)/2
+
+            cv2.putText(frame, f"Distance: {distance:.2f} meters", (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+            cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
+            print(x, y, w, h)
+            cv2.rectangle(frame, (int(x+(w/2))-5, int(y+(h/2))-5), (int(x+(w/2))+5, int(y+(h/2))+5), (0, 255, 0), 2)
+            # print(image_width, image_height)
+        return distance, face_x, face_y
+    else:
+        return -1, -1, -1
+    
+out = cv2.VideoWriter('vvv.avi', cv2.VideoWriter_fourcc(*'avi'), 30, (width, height))
+
+while True:
+    frame = cam.get_cv_frame()
+    print(frame)
+    try:
+        out.write(frame)
+        dist, x, y = distance_to_face(frame)
+        # print(dist)
+        if dist != -1:
+            if dist > 1.0:
+                dron.go_to_local_point_body_fixed(0, round(dist - 1.0, 1), 0)
+                while not dron.point_reached():
+                    pass
+                print('Dron forward:', round(dist-1.0, 1))
+            elif dist < 1.0:
+                dron.go_to_local_point_body_fixed(0, round((1.0 - dist)*-1, 1), 0, 0)
+                while not dron.point_reached():
+                    pass
+                print('Dron backward:', round((1.0 - dist)*-1, 1))
+            if x > 0.25 and x < 0.35 and y > 0.25 and y <0.35:
+                print('Лицо в центре')
+            elif x > 0.25:
+                print('Поворот исполнителя в право')
+                dron.go_to_local_point_body_fixed(0, 0, 0, -1*radians(5))
+                while not dron.point_reached():
+                    pass
+            elif x < 0.35:
+                print('поворот исполнителя в лево')
+                dron.go_to_local_point_body_fixed(0, 0, 0, radians(5))
+                while not dron.point_reached():
+                    pass
+
+        cv2.imshow('Distance Detection', frame)
+
+        if cv2.waitKey(3) & 0xFF == ord('q'):
+            dron.land()
+            dron.disarm()
+            break
+    except:
+        print('Frame-')
+        
+dron.land()
+dron.disarm()
+# cam.release()
+# out.release()
+cv2.destroyAllWindows()
